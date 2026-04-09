@@ -1,0 +1,14 @@
+{
+  "num_samples": 5,
+  "generated": 5,
+  "skipped": 0,
+  "train": 5,
+  "val": 0,
+  "train_ratio": 0.8,
+  "resolution": [
+    640,
+    640
+  ],
+  "class_id": 0,
+  "engine": "BLENDER_EEVEE"
+}
