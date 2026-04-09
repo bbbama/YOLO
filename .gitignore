@@ -8,3 +8,4 @@ lego_dataset/
 
 # Ignoruj pliki Blendera (opcjonalnie, są duże)
 *.blend1
+lego_dataset/

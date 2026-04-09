@@ -1,6 +1,0 @@
-path: /Users/bartek/Desktop/Inżynierka/lego_dataset/
-train: images/train
-val: images/val
-
-nc: 1
-names: ['lego_2x4']
