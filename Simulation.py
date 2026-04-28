@@ -10,25 +10,33 @@ import json
 # Konfiguracja
 # -----------------------------
 CLASS_ID = 0
-obj1 = bpy.data.objects.get("LEGO-2X4-L")
-obj2 = bpy.data.objects.get("Cube2")
+obj_wzor = bpy.data.objects.get("LEGO-2X4-L")  # Obiekt-wzór, ukryty, tylko do kopiowania
+obj_polka = bpy.data.objects.get("Cube2")
 cam = bpy.data.objects.get("Camera")
 light = bpy.data.objects.get("Light")
 num_samples = 5
 scene = bpy.context.scene
 base_dir = "/Users/bartek/Desktop/Inżynierka/lego_dataset/"
 
+# Ile klocków maksymalnie na jednym zdjęciu
+MIN_KLOCKOW = 1
+MAX_KLOCKOW = 10
+
 # -----------------------------
 # Walidacja obiektów
 # -----------------------------
-assert obj1 is not None, "Nie znaleziono LEGO-2X4-L!"
-assert obj2 is not None, "Nie znaleziono Cube2!"
+assert obj_wzor is not None, "Nie znaleziono LEGO-2X4-L!"
+assert obj_polka is not None, "Nie znaleziono Cube2!"
 assert cam is not None, "Nie znaleziono Camera!"
+
+# Ukrywamy obiekt-wzór – służy tylko jako źródło do kopiowania
+obj_wzor.hide_render = True
+obj_wzor.hide_viewport = True
 
 # -----------------------------
 # Reprodukowalność
 # -----------------------------
-random.seed(42)
+# random.seed(42)  # odkomentuj tylko jeśli potrzebujesz reprodukowalności
 
 # -----------------------------
 # Tworzenie struktury katalogów
@@ -64,53 +72,118 @@ scene.render.image_settings.file_format = 'PNG'
 scene.render.image_settings.color_mode = 'RGB'
 scene.render.image_settings.compression = 0
 
-# -----------------------------
-# Funkcja: unikalne materiały
-# -----------------------------
-def ensure_unique_material(obj, mat_name):
-    """Upewnia się że obiekt ma własny, unikalny materiał."""
-    if obj.active_material is None:
-        mat = bpy.data.materials.new(name=mat_name)
-        mat.node_tree = True
-        obj.active_material = mat
-    elif obj.active_material.users > 1 or obj.active_material.name != mat_name:
-        mat = obj.active_material.copy()
-        mat.name = mat_name
-        obj.active_material = mat
+# ================================================================
+# FUNKCJE POMOCNICZE
+# ================================================================
 
-ensure_unique_material(obj1, "Mat_Klocek")
-ensure_unique_material(obj2, "Mat_Polka")
+def daj_nowy_material(obj, nazwa):
+    """Tworzy nowy unikalny materiał i przypisuje go do obiektu."""
+    mat = bpy.data.materials.new(name=nazwa)
+    mat.use_nodes = True
+    obj.active_material = mat
+    return mat
 
-# -----------------------------
-# Funkcja: losowe tło świata
-# -----------------------------
-def randomize_world_background():
+
+def pobierz_bsdf(obj):
+    """Zwraca węzeł Principled BSDF materiału obiektu lub None."""
+    mat = obj.active_material
+    if not mat or not mat.node_tree:
+        return None
+    return mat.node_tree.nodes.get("Principled BSDF")
+
+
+def losuj_material_klocka(obj):
+    """Losuje kolor, szorstkość i metaliczność klocka. Zwraca kolor RGB."""
+    bsdf = pobierz_bsdf(obj)
+    if not bsdf:
+        return None
+
+    kolor = (random.random(), random.random(), random.random(), 1.0)
+    bsdf.inputs["Base Color"].default_value = kolor
+    bsdf.inputs["Roughness"].default_value = random.uniform(0.05, 0.5)
+    bsdf.inputs["Metallic"].default_value = random.uniform(0.0, 0.1)
+
+    return kolor[:3]
+
+
+def losuj_material_polki(obj_polka, unikaj_koloru, min_dystans=0.4):
     """
-    Losuje kolor i intensywność tła sceny (światło otoczenia).
-    Zapobiega overfittingowi modelu na stałe tło.
+    Losuje kolor półki z szumem proceduralnym,
+    dbając o kontrast z podanym kolorem klocka.
     """
-    world = scene.world
-    if not world:
+    mat = obj_polka.active_material
+    if not mat or not mat.node_tree:
         return
 
-    if not world.node_tree:
-        world.node_tree = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    bsdf = nodes.get("Principled BSDF")
+    if not bsdf:
+        return
+
+    # Odepnij stare połączenia do Base Color
+    for link in list(bsdf.inputs["Base Color"].links):
+        links.remove(link)
+
+    # Losuj kolor podstawowy z minimalnym dystansem od klocka
+    for _ in range(10):
+        c1 = (random.random(), random.random(), random.random(), 1.0)
+        dystans = math.sqrt(sum((a - b) ** 2 for a, b in zip(c1[:3], unikaj_koloru)))
+        if dystans > min_dystans:
+            break
+
+    c2 = (random.random(), random.random(), random.random(), 1.0)
+
+    # Węzeł szumu proceduralnego
+    tex_node = nodes.get("Noise_Tex") or nodes.new("ShaderNodeTexNoise")
+    tex_node.name = "Noise_Tex"
+    tex_node.inputs["Scale"].default_value = random.uniform(2.0, 50.0)
+    tex_node.inputs["Detail"].default_value = 15.0
+
+    # Węzeł mieszania kolorów
+    mix_node = nodes.get("Mix_Col") or nodes.new("ShaderNodeMixRGB")
+    mix_node.name = "Mix_Col"
+    mix_node.inputs["Color1"].default_value = c1
+    mix_node.inputs["Color2"].default_value = c2
+    mix_node.inputs["Fac"].default_value = random.uniform(0.1, 0.6)
+
+    links.new(tex_node.outputs["Fac"], mix_node.inputs["Fac"])
+    links.new(mix_node.outputs["Color"], bsdf.inputs["Base Color"])
+
+    bsdf.inputs["Roughness"].default_value = random.uniform(0.1, 1.0)
+    bsdf.inputs["Metallic"].default_value = random.uniform(0.0, 0.4)
+
+
+def losuj_tlo_swiata():
+    """Losuje kolor i intensywność tła sceny."""
+    world = scene.world
+    if not world or not world.node_tree:
+        return
 
     bg_node = world.node_tree.nodes.get("Background")
     if bg_node:
         bg_node.inputs["Color"].default_value = (
-            random.random(),
-            random.random(),
-            random.random(),
-            1.0
+            random.random(), random.random(), random.random(), 1.0
         )
         bg_node.inputs["Strength"].default_value = random.uniform(0.3, 1.5)
 
-# -----------------------------
-# Funkcja: losowa pozycja kamery
-# -----------------------------
-def randomize_camera(cam, target_obj):
-    r = random.uniform(8, 14)
+
+def losuj_swiatlo(light):
+    """Losuje pozycję, moc i barwę światła."""
+    if not light:
+        return
+    light.location = (
+        random.uniform(-5, 5),
+        random.uniform(-5, 5),
+        random.uniform(2, 6)
+    )
+    light.data.energy = random.uniform(100, 1000)
+    light.data.color = (1.0, random.uniform(0.8, 1.0), random.uniform(0.7, 1.0))
+
+
+def losuj_kamere(cam, cel):
+    """Ustawia kamerę w losowej pozycji sferycznej skierowanej na obiekt cel."""
+    r = random.uniform(12, 18)
     theta = random.uniform(0, 2 * math.pi)
     phi = random.uniform(0.15, 0.55)
 
@@ -120,142 +193,155 @@ def randomize_camera(cam, target_obj):
         r * math.cos(phi)
     ))
 
-    direction = target_obj.location - cam.location
-    cam.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+    kierunek = cel.location - cam.location
+    cam.rotation_euler = kierunek.to_track_quat('-Z', 'Y').to_euler()
 
-# -----------------------------
-# Funkcja: losowy kolor klocka
-# -----------------------------
-def randomize_material_color(obj):
-    """Losuje kolor materiału obiektu, zwraca kolor RGB jako tuple."""
-    mat = obj.active_material
-    if not mat:
+
+def czy_nachodza(obj1, obj2, margines=0.2):
+    """
+    Sprawdza kolizję przez porównanie okręgów okalających oba klocki.
+    Promień okręgu = połowa przekątnej klocka, więc obejmuje go w pełni
+    niezależnie od obrotu. Używamy obj.dimensions i obj.location zamiast
+    matrix_world, bo są zawsze aktualne bez potrzeby update().
+    """
+    def promien(obj):
+        w = obj.dimensions
+        return math.sqrt((w.x / 2) ** 2 + (w.y / 2) ** 2)
+
+    dystans = math.sqrt(
+        (obj1.location.x - obj2.location.x) ** 2 +
+        (obj1.location.y - obj2.location.y) ** 2
+    )
+    return dystans < (promien(obj1) + promien(obj2) + margines)
+
+
+def oblicz_bbox_yolo(scene, cam, obj):
+    """Oblicza bounding box obiektu w formacie YOLO (cx, cy, w, h) w zakresie [0,1]."""
+    bpy.context.view_layer.update()
+    corners = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
+    coords_2d = [bpy_extras.object_utils.world_to_camera_view(scene, cam, c) for c in corners]
+
+    x_points = [c.x for c in coords_2d]
+    y_points = [1.0 - c.y for c in coords_2d]
+
+    min_x, max_x = max(0.0, min(x_points)), min(1.0, max(x_points))
+    min_y, max_y = max(0.0, min(y_points)), min(1.0, max(y_points))
+
+    if min_x >= max_x or min_y >= max_y:
         return None
 
-    if mat.users > 1:
-        mat = mat.copy()
-        obj.active_material = mat
+    w = max_x - min_x
+    h = max_y - min_y
+    return (min_x + w / 2, min_y + h / 2, w, h)
 
-    new_color = (random.random(), random.random(), random.random(), 1.0)
 
-    if mat.node_tree:
-        bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if bsdf:
-            bsdf.inputs["Base Color"].default_value = new_color
+def stworz_klocki_na_scenie(obj_wzor, liczba_klockow):
+    """
+    Klonuje obj_wzor wielokrotnie, rozmieszcza klocki bez nakładania się.
+    Zwraca listę stworzonych obiektów.
+    """
+    stworzone = []
+
+    for j in range(liczba_klockow):
+        nowy = obj_wzor.copy()
+        nowy.data = obj_wzor.data.copy()
+        bpy.context.collection.objects.link(nowy)
+
+        znaleziono = False
+        for _ in range(100):
+            nowy.location = mathutils.Vector((
+                random.uniform(-2, 2),
+                random.uniform(-2, 2),
+                -1
+            ))
+            nowy.rotation_euler = (0, 0, random.uniform(0, 2 * math.pi))
+            bpy.context.view_layer.update()
+
+            nachodzi = any(czy_nachodza(nowy, s) for s in stworzone)
+
+            if not nachodzi:
+                znaleziono = True
+                break
+
+        if znaleziono:
+            nowy.hide_render = False
+            nowy.hide_viewport = False
+            # Każdy klocek dostaje własny materiał
+            daj_nowy_material(nowy, f"Mat_Klocek_{j}")
+            losuj_material_klocka(nowy)
+            stworzone.append(nowy)
         else:
-            for node in mat.node_tree.nodes:
-                if "Color" in node.inputs:
-                    node.inputs["Color"].default_value = new_color
-                    break
-    else:
-        mat.diffuse_color = new_color
+            # Nie znaleziono miejsca – usuwamy kopię
+            mesh = nowy.data
+            bpy.data.objects.remove(nowy, do_unlink=True)
+            if mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
 
-    return new_color[:3]
+    return stworzone
 
-# -----------------------------
-# Funkcja: losowy kolor półki
-# -----------------------------
-def randomize_shelf_color(shelf_obj, avoid_color, min_dist=0.4):
-    """
-    Losuje kolor półki, gwarantując że będzie wystarczająco różny od klocka.
-    avoid_color: tuple RGB klocka
-    min_dist: minimalny dystans euklidesowy w przestrzeni RGB (0.0 - 1.73)
-    """
-    mat = shelf_obj.active_material
-    if not mat:
-        return
 
-    for _ in range(10):
-        new_color = (random.random(), random.random(), random.random(), 1.0)
-        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(new_color[:3], avoid_color)))
-        if dist > min_dist:
-            break
+def usun_klocki(lista_klockow):
+    """Usuwa wszystkie tymczasowe obiekty klocków ze sceny."""
+    for klocek in lista_klockow:
+        mesh = klocek.data
+        bpy.data.objects.remove(klocek, do_unlink=True)
+        if mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
 
-    if mat.node_tree:
-        bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if bsdf:
-            bsdf.inputs["Base Color"].default_value = new_color
-    else:
-        mat.diffuse_color = new_color
 
-# -----------------------------
-# Funkcja: YOLO Bbox
-# -----------------------------
-def get_yolo_bbox(scene, cam, obj):
-    bbox_corners = [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
-    co_2d = [bpy_extras.object_utils.world_to_camera_view(scene, cam, c) for c in bbox_corners]
+# ================================================================
+# Przygotowanie stałych elementów sceny
+# ================================================================
 
-    x_coords = [c.x for c in co_2d]
-    y_coords = [1.0 - c.y for c in co_2d]
+# Półka ma własny materiał (raz, nie zmieniamy struktury węzłów przy każdej klatce)
+if obj_polka.active_material is None or obj_polka.active_material.users > 1:
+    daj_nowy_material(obj_polka, "Mat_Polka")
 
-    min_x, max_x = max(0.0, min(x_coords)), min(1.0, max(x_coords))
-    min_y, max_y = max(0.0, min(y_coords)), min(1.0, max(y_coords))
+obj_polka.location = (0, 0, -2)
 
-    if min_x == max_x or min_y == max_y:
-        return None
-
-    width = max_x - min_x
-    height = max_y - min_y
-    center_x = min_x + width / 2
-    center_y = min_y + height / 2
-
-    return (center_x, center_y, width, height)
-
-# -----------------------------
-# Reset półki
-# -----------------------------
-obj2.animation_data_clear()
-obj2.location = (0, 0, -2)
-
-# -----------------------------
-# Generowanie datasetu
-# -----------------------------
+# ================================================================
+# Główna pętla generowania datasetu
+# ================================================================
 frame = 0
 skipped = 0
 train_count = 0
 val_count = 0
 
 for i in range(num_samples):
-    # Losowy podział train/val
     split = "train" if random.random() < 0.8 else "val"
 
-    # 1. Losowa pozycja klocka
-    obj1.location = mathutils.Vector((
-        random.uniform(-2.0, 2.0),
-        random.uniform(-2.0, 2.0),
-        -1
-    ))
+    # 1. Losuj liczbę klocków na tej klatce
+    liczba_klockow = random.randint(MIN_KLOCKOW, MAX_KLOCKOW)
 
-    # 2. Losowa rotacja Z
-    obj1.rotation_euler = (0, 0, random.uniform(0, 2 * math.pi))
+    # 2. Postaw klocki na scenie bez nakładania się
+    klocki = stworz_klocki_na_scenie(obj_wzor, liczba_klockow)
 
-    # 3. Losowy kolor klocka, a następnie półki (inny niż klocek)
-    lego_color = randomize_material_color(obj1)
-    if lego_color:
-        randomize_shelf_color(obj2, lego_color)
+    if not klocki:
+        print(f"Pominięto klatkę {i} – nie udało się postawić żadnego klocka.")
+        skipped += 1
+        continue
 
-    # 4. Losowa pozycja kamery
-    randomize_camera(cam, obj1)
+    # 3. Wylosuj kolor półki kontrastujący z pierwszym klockiem
+    bsdf_ref = pobierz_bsdf(klocki[0])
+    kolor_ref = tuple(bsdf_ref.inputs["Base Color"].default_value[:3]) if bsdf_ref else (0.5, 0.5, 0.5)
+    losuj_material_polki(obj_polka, kolor_ref)
 
-    # 5. Losowe tło
-    randomize_world_background()
+    # 4. Ustaw kamerę, tło i światło
+    losuj_kamere(cam, obj_polka)
+    losuj_tlo_swiata()
+    losuj_swiatlo(light)
 
-    # 6. Losowe światło
-    if light:
-        light.location = (
-            random.uniform(-5, 5),
-            random.uniform(-5, 5),
-            random.uniform(2, 6)
-        )
-        light.data.energy = random.uniform(100, 1000)
-
-    # 7. Aktualizacja widoku
+    # 7. Aktualizacja i wyliczenie bounding boxów
     bpy.context.view_layer.update()
 
-    # 8. Wyliczenie bounding box
-    bbox = get_yolo_bbox(scene, cam, obj1)
+    yolo_labels = []
+    for klocek in klocki:
+        bbox = oblicz_bbox_yolo(scene, cam, klocek)
+        if bbox and bbox[2] > 0.01 and bbox[3] > 0.01:
+            yolo_labels.append(bbox)
 
-    if bbox and bbox[2] > 0.01 and bbox[3] > 0.01:
+    # 8. Render i zapis (tylko jeśli jest co labelować)
+    if yolo_labels:
         img_path = os.path.join(base_dir, "images", split, f"img_{frame:04d}.png")
         label_path = os.path.join(base_dir, "labels", split, f"img_{frame:04d}.txt")
 
@@ -263,7 +349,8 @@ for i in range(num_samples):
         bpy.ops.render.render(write_still=True)
 
         with open(label_path, "w") as f:
-            f.write(f"{CLASS_ID} {bbox[0]:.6f} {bbox[1]:.6f} {bbox[2]:.6f} {bbox[3]:.6f}\n")
+            for lb in yolo_labels:
+                f.write(f"{CLASS_ID} {lb[0]:.6f} {lb[1]:.6f} {lb[2]:.6f} {lb[3]:.6f}\n")
 
         if split == "train":
             train_count += 1
@@ -272,15 +359,17 @@ for i in range(num_samples):
 
         frame += 1
 
-        if frame % 10 == 0:
-            print(f"Postęp: {frame}/{num_samples} | train: {train_count} | val: {val_count}")
+        print(f"Zdjęcie {frame}: Klocków: {len(klocki)}")
     else:
         skipped += 1
-        print(f"Pominięto klatkę {i} (obiekt poza kadrem lub za mały)")
+        print(f"Pominięto klatkę {i} (wszystkie klocki poza kadrem lub za małe)")
 
-# -----------------------------
+    # 9. Sprzątanie – usuwamy tymczasowe klocki
+    usun_klocki(klocki)
+
+# ================================================================
 # Zapis konfiguracji
-# -----------------------------
+# ================================================================
 config = {
     "num_samples": num_samples,
     "generated": frame,
@@ -288,6 +377,8 @@ config = {
     "train": train_count,
     "val": val_count,
     "train_ratio": 0.8,
+    "min_klockow": MIN_KLOCKOW,
+    "max_klockow": MAX_KLOCKOW,
     "resolution": [scene.render.resolution_x, scene.render.resolution_y],
     "class_id": CLASS_ID,
     "engine": scene.render.engine,
@@ -300,6 +391,3 @@ print(f"  Wygenerowano: {frame} klatek")
 print(f"  Train:        {train_count}")
 print(f"  Val:          {val_count}")
 print(f"  Pominięto:    {skipped}")
-
-#Przetosowac tryb batchowy
-#Ramka na klocek do labelowania

@@ -9,3 +9,6 @@ lego_dataset/
 # Ignoruj pliki Blendera (opcjonalnie, są duże)
 *.blend1
 lego_dataset/
+yolo_env/
+kroki_implementacji.txt
+runs/detect/
