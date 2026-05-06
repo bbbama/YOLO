@@ -16,7 +16,8 @@ cam = bpy.data.objects.get("Camera")
 light = bpy.data.objects.get("Light")
 num_samples = 5
 scene = bpy.context.scene
-base_dir = "/Users/bartek/Desktop/Inżynierka/lego_dataset/"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.join(script_dir, "lego_dataset")
 
 # Ile klocków maksymalnie na jednym zdjęciu
 MIN_KLOCKOW = 1
@@ -36,7 +37,7 @@ obj_wzor.hide_viewport = True
 # -----------------------------
 # Reprodukowalność
 # -----------------------------
-# random.seed(42)  # odkomentuj tylko jeśli potrzebujesz reprodukowalności
+# random.seed(42)  # odkomentuj jeśli reprodukowalność
 
 # -----------------------------
 # Tworzenie struktury katalogów
@@ -391,3 +392,9 @@ print(f"  Wygenerowano: {frame} klatek")
 print(f"  Train:        {train_count}")
 print(f"  Val:          {val_count}")
 print(f"  Pominięto:    {skipped}")
+
+# popracowac z oswietleniem
+# dodac rozpraszacze - obiekty lub zdjecia tła aby lepiej trenowac model
+# zaproponowac analityke aby porownac boxa z ground true z danych testowych z boxem zwracanych przez model  na pewnej probce testowej
+# zalozyc treshold 70% pewnosci - model rozpoznal wszystkie elementy na zdjeciu - wtedy zdjecie jest zaliczone jako poprawne
+# docx z wersjami modelu i wersjami datasetu - opis, co datatset zawiera i jak jest stworzony.
