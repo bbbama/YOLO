@@ -12,3 +12,4 @@ lego_dataset/
 yolo_env/
 kroki_implementacji.txt
 runs/detect/
+analytics.py
