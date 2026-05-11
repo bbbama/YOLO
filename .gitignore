@@ -3,7 +3,6 @@ lego_dataset/
 
 # Ignoruj pojedyncze pliki obrazów i labeli
 *.png
-*.jpg
 *.txt
 
 # Ignoruj pliki Blendera (opcjonalnie, są duże)
