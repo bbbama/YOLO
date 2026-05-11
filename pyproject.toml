@@ -1,0 +1,7 @@
+[project]
+name = "lego-yolo"
+version = "0.1.0"
+dependencies = [
+    "ultralytics",
+    "numpy",
+]
