@@ -11,7 +11,7 @@ import glob
 # KONFIGURACJA
 # ============================================================
 CLASS_ID      = 0
-NUM_SAMPLES   = 10
+NUM_SAMPLES   = 1000
 MIN_KLOCKI    = 1
 MAX_KLOCKI    = 10
 MAX_DYSTR     = 8        # rozpraszacze (distractor objects)

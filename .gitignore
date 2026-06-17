@@ -1,14 +1,21 @@
 # Ignoruj wygenerowany dataset
 lego_dataset/
+runs/
 
-# Ignoruj pojedyncze pliki obrazów i labeli
-*.png
-*.txt
+# Python & System
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+.ipynb_checkpoints/
 
-# Ignoruj pliki Blendera (opcjonalnie, są duże)
+# Modele i duże pliki (nie wrzucamy wag modeli do git)
+*.pt
+*.blend
 *.blend1
-lego_dataset/
+
+# Inne
 yolo_env/
+venv/
 kroki_implementacji.txt
-runs/detect/
 analytics.py
