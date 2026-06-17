@@ -55,6 +55,7 @@ scene.eevee.taa_render_samples            = 64
 scene.render.image_settings.file_format   = 'PNG'
 scene.render.image_settings.color_mode    = 'RGB'
 scene.render.image_settings.compression   = 0
+scene.render.use_motion_blur              = True
 
 # ============================================================
 # TWORZENIE KATALOGÓW I PLIKU YAML
@@ -203,10 +204,10 @@ def ustaw_tlo():
 # KAMERA
 # ============================================================
 def ustaw_kamere():
-    """Losowa pozycja sferyczna, skierowana na półkę."""
-    r     = random.uniform(12, 18)
+    """Losowa pozycja sferyczna, skierowana na półkę + losowa ogniskowa."""
+    r     = random.uniform(8, 22)
     theta = random.uniform(0, 2 * math.pi)
-    phi   = random.uniform(0.15, 0.55)
+    phi   = random.uniform(0.05, 0.85)
     cam.location = mathutils.Vector((
         r * math.sin(phi) * math.cos(theta),
         r * math.sin(phi) * math.sin(theta),
@@ -214,6 +215,9 @@ def ustaw_kamere():
     ))
     kierunek = obj_polka.location - cam.location
     cam.rotation_euler = kierunek.to_track_quat('-Z', 'Y').to_euler()
+
+    # Losowa ogniskowa (zastępuje/wspiera lens distortion)
+    cam.data.lens = random.uniform(20, 70)
 
 # ============================================================
 # ŚWIATŁA
@@ -333,20 +337,48 @@ def usun_rozpraszacze(lista):
             bpy.data.meshes.remove(mesh)
 
 # ============================================================
+# EFEKTY DODATKOWE
+# ============================================================
+def ustaw_dof(klocki):
+    """Ustawia głębię ostrości na losowy klocek."""
+    if not klocki:
+        return
+    cam.data.dof.use_dof = True
+    cam.data.dof.aperture_fstop = random.uniform(1.4, 8.0)
+    cam.data.dof.focus_object = random.choice(klocki)
+
+def ustaw_compositor():
+    """Symulacja efektów optycznych bez Compositora - tylko ogniskowa kamery."""
+    # Compositor API jest niestabilne w Blenderze 5.x - pomijamy
+    # Efekt lens distortion zastępuje losowa ogniskowa w ustaw_kamere()
+    pass
+
+# ============================================================
 # BOUNDING BOX YOLO
 # ============================================================
 def bbox_yolo(obj):
-    """Zwraca (cx, cy, w, h) w [0,1] lub None jeśli obiekt poza kadrem."""
+    """Zwraca (cx, cy, w, h) w [0,1] lub None jeśli obiekt poza kadrem (min 20% widoczności)."""
     bpy.context.view_layer.update()
     corners  = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
     pts      = [bpy_extras.object_utils.world_to_camera_view(scene, cam, c) for c in corners]
     xs       = [p.x       for p in pts]
     ys       = [1.0 - p.y for p in pts]
+
+    orig_w = max(xs) - min(xs)
+    orig_h = max(ys) - min(ys)
+
     x0, x1   = max(0.0, min(xs)), min(1.0, max(xs))
     y0, y1   = max(0.0, min(ys)), min(1.0, max(ys))
+
     if x0 >= x1 or y0 >= y1:
         return None
+
     w, h = x1 - x0, y1 - y0
+
+    # Akceptuj tylko jeśli min 20% wymiaru jest w kadrze
+    if w < 0.2 * orig_w or h < 0.2 * orig_h:
+        return None
+
     return (x0 + w/2, y0 + h/2, w, h)
 
 # ============================================================
@@ -381,13 +413,18 @@ for i in range(NUM_SAMPLES):
         losuj_material_polki(kolor_ref)
 
     ustaw_kamere()
+    ustaw_dof(klocki)
     ustaw_tlo()
     losuj_swiatla()
+    ustaw_compositor()
+
+    # Losowy motion blur shutter
+    scene.render.motion_blur_shutter = random.uniform(0.0, 0.4)
 
     # --- Bounding boxy ---
     bpy.context.view_layer.update()
     etykiety = [bbox_yolo(k) for k in klocki]
-    etykiety  = [e for e in etykiety if e and e[2] > 0.01 and e[3] > 0.01]
+    etykiety  = [e for e in etykiety if e and e[2] > 0.05 and e[3] > 0.05]
 
     # --- Render i zapis ---
     if etykiety:
