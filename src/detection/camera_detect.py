@@ -1,8 +1,11 @@
 from ultralytics import YOLO
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 def main():
     # Załaduj TWÓJ wytrenowany model
-    model = YOLO("best.pt") 
+    model = YOLO(PROJECT_ROOT / "models" / "best.pt")
     #runs/detect/train2/weights/best.pt
 
     print("Uruchamianie kamery... Naciśnij 'q', aby wyjść.")

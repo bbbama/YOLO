@@ -1,6 +1,8 @@
 # Ignoruj wygenerowany dataset
-lego_dataset/
+data/
 runs/
+docs/
+models/
 
 # Python & System
 __pycache__/
@@ -14,8 +16,12 @@ __pycache__/
 *.blend
 *.blend1
 
+# Wyjścia testów
+tests/test_augmentacji/
+
 # Inne
 yolo_env/
 venv/
-kroki_implementacji.txt
 analytics.py
+
+TODO.md

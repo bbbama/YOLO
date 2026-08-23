@@ -2,15 +2,18 @@ import os
 import glob
 import logging
 import numpy as np
+from pathlib import Path
 from ultralytics import YOLO
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 # Parametry
-MODEL_PATH = "runs/detect/train2/weights/best.pt"
-IMAGES_DIR = "lego_dataset/images/test"
-LABELS_DIR = "lego_dataset/labels/test"
+MODEL_PATH = PROJECT_ROOT / "runs" / "detect" / "train-2" / "weights" / "best.pt"
+IMAGES_DIR = PROJECT_ROOT / "data" / "lego_dataset" / "images" / "test"
+LABELS_DIR = PROJECT_ROOT / "data" / "lego_dataset" / "labels" / "test"
 CONF_THRESHOLD = 0.7
 IOU_THRESHOLD = 0.5         # standard branżowy
 ACCEPT_MAP_MIN = 0.5        # minimalny mAP@0.5 do akceptacji

@@ -1,13 +1,15 @@
 from ultralytics import YOLO
-import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 def main():
     # 1. Załaduj model bazowy
     # Używamy wersji 'nano' (n), bo jest najszybsza do nauki i testów
-    model = YOLO("yolo11n.pt")
+    model = YOLO(PROJECT_ROOT / "models" / "yolo11n.pt")
 
     # 2. Ścieżka do Twoich danych
-    data_path = "lego_dataset/data.yaml"
+    data_path = PROJECT_ROOT / "data" / "lego_dataset" / "data.yaml"
 
     print(f"Rozpoczynam trening na podstawie: {data_path}")
 

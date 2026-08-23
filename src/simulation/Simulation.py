@@ -11,7 +11,7 @@ import glob
 # KONFIGURACJA
 # ============================================================
 CLASS_ID      = 0
-NUM_SAMPLES   = 1000
+NUM_SAMPLES   = 10
 MIN_KLOCKI    = 1
 MAX_KLOCKI    = 10
 MAX_DYSTR     = 8        # rozpraszacze (distractor objects)
@@ -27,9 +27,10 @@ USE_TEX_BG    = True     # tekstura tła sceny
 USE_TEX_SHELF = True     # tekstura półki
 
 script_dir    = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR      = os.path.join(script_dir, "lego_dataset")
-TEX_BG_DIR    = os.path.join(script_dir, "textures", "backgrounds")
-TEX_SHELF_DIR = os.path.join(script_dir, "textures", "shelf")
+PROJECT_ROOT  = os.path.dirname(os.path.dirname(script_dir))
+BASE_DIR      = os.path.join(PROJECT_ROOT, "data", "lego_dataset")
+TEX_BG_DIR    = os.path.join(PROJECT_ROOT, "data", "textures", "backgrounds")
+TEX_SHELF_DIR = os.path.join(PROJECT_ROOT, "data", "textures", "shelf")
 
 # ============================================================
 # POBRANIE OBIEKTÓW ZE SCENY
@@ -66,7 +67,7 @@ for split in ["train", "val", "test"]:
 
 with open(os.path.join(BASE_DIR, "data.yaml"), "w") as f:
     f.write(
-        f"path: {BASE_DIR}\n"
+        f"path: .\n"
         f"train: images/train\n"
         f"val:   images/val\n"
         f"\nnc: 1\nnames: ['lego_2x4']\n"
@@ -105,13 +106,116 @@ def nowy_material(obj, nazwa):
 # MATERIAŁY
 # ============================================================
 def losuj_material_klocka(obj, idx):
+    """Proceduralny materiał klocka z zarysowaniami, bump i pointiness."""
     node = nowy_material(obj, f"Mat_Klocek_{idx}")
     if not node:
         return (0.5, 0.5, 0.5)
+
+    mat = obj.active_material
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    # -- losowe wartości bazowe --
     kolor = (random.random(), random.random(), random.random(), 1.0)
-    node.inputs["Base Color"].default_value  = kolor
-    node.inputs["Roughness"].default_value   = random.uniform(0.05, 0.5)
-    node.inputs["Metallic"].default_value    = random.uniform(0.0, 0.1)
+    bazowy_metallic  = random.uniform(0.0, 0.1)
+
+    # ================================================================
+    # 1. Noise → ColorRamp → Roughness  (mikro-zarysowania)
+    # ================================================================
+    n_rough = nodes.new("ShaderNodeTexNoise")
+    n_rough.location = (-750, 150)
+    n_rough.name = "Noise_Rough"
+    n_rough.inputs["Scale"].default_value  = random.uniform(60.0, 120.0)
+    n_rough.inputs["Detail"].default_value = 8.0
+    n_rough.inputs["Roughness"].default_value = 0.6
+
+    cr_rough = nodes.new("ShaderNodeValToRGB")
+    cr_rough.location = (-500, 150)
+    cr_rough.name = "CR_Rough"
+    # rampa: ciemne → niskie roughness, jasne → wysokie roughness
+    cr_rough.color_ramp.elements[0].position = 0.35
+    cr_rough.color_ramp.elements[1].position = 0.65
+
+    links.new(n_rough.outputs["Fac"], cr_rough.inputs["Fac"])
+
+    # ================================================================
+    # 2. Noise → Bump  (delikatne nierówności normalnych)
+    # ================================================================
+    n_bump_tex = nodes.new("ShaderNodeTexNoise")
+    n_bump_tex.location = (-750, -300)
+    n_bump_tex.name = "Noise_Bump"
+    n_bump_tex.inputs["Scale"].default_value  = random.uniform(80.0, 150.0)
+    n_bump_tex.inputs["Detail"].default_value = 6.0
+
+    n_bump = nodes.new("ShaderNodeBump")
+    n_bump.location = (-500, -300)
+    n_bump.name = "Bump"
+    n_bump.inputs["Strength"].default_value = 0.08
+    n_bump.inputs["Distance"].default_value = 0.01
+    links.new(n_bump_tex.outputs["Fac"], n_bump.inputs["Height"])
+
+    # ================================================================
+    # 3. Drugi Noise (duża skala) → Mix Color z Base Color
+    # ================================================================
+    n_color = nodes.new("ShaderNodeTexNoise")
+    n_color.location = (-750, 0)
+    n_color.name = "Noise_Color"
+    n_color.inputs["Scale"].default_value  = random.uniform(2.0, 8.0)
+    n_color.inputs["Detail"].default_value = 4.0
+
+    mix_color = nodes.new("ShaderNodeMixRGB")
+    mix_color.location = (-450, 0)
+    mix_color.name = "Mix_BaseColor"
+    mix_color.blend_type = 'MIX'
+    mix_color.inputs["Color1"].default_value = kolor
+    links.new(n_color.outputs["Color"], mix_color.inputs["Color2"])
+    mix_color.inputs["Fac"].default_value = random.uniform(0.05, 0.15)
+
+    # ================================================================
+    # 4. Geometry → Pointiness  (przetarcia na krawędziach)
+    # ================================================================
+    n_geom = nodes.new("ShaderNodeNewGeometry")
+    n_geom.location = (-750, -500)
+    n_geom.name = "Geometry"
+
+    # Pointiness: 0=flat, 1=edge → wygładzamy potęgą < 1
+    n_pow = nodes.new("ShaderNodeMath")
+    n_pow.location = (-550, -500)
+    n_pow.name = "Pow_Pointiness"
+    n_pow.operation = 'POWER'
+    n_pow.inputs[1].default_value = 0.4
+    links.new(n_geom.outputs["Pointiness"], n_pow.inputs[0])
+
+    # rozjaśnienie krawędzi: mix z jaśniejszym odcieniem
+    mix_edge = nodes.new("ShaderNodeMixRGB")
+    mix_edge.location = (-300, -450)
+    mix_edge.name = "Edge_Wear"
+    mix_edge.blend_type = 'MIX'
+    links.new(mix_color.outputs["Color"], mix_edge.inputs["Color1"])
+    # jaśniejsza wersja koloru (rozjaśnienie o ~30 %)
+    jasny = tuple(min(c + 0.3, 1.0) for c in kolor[:3]) + (1.0,)
+    mix_edge.inputs["Color2"].default_value = jasny
+    links.new(n_pow.outputs["Value"], mix_edge.inputs["Fac"])
+
+    # ================================================================
+    # Podłączenie do Principled BSDF
+    # ================================================================
+    links.new(mix_edge.outputs["Color"], node.inputs["Base Color"])
+
+    # Roughness: kolor rampy z noise'a
+    links.new(cr_rough.outputs["Color"], node.inputs["Roughness"])
+
+    # Normal: bump z noise'a
+    links.new(n_bump.outputs["Normal"], node.inputs["Normal"])
+
+    node.inputs["Metallic"].default_value = bazowy_metallic
+
+    # Estetyczny układ: shader i output na końcu
+    node.location = (250, 0)
+    out = nodes.get("Material Output")
+    if out:
+        out.location = (550, 0)
+
     return kolor[:3]
 
 def losuj_material_polki(kolor_klocka):
