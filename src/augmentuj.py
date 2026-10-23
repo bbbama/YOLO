@@ -31,14 +31,14 @@ _SZUM_GAUSS_SCALE = (0.02, 0.08)
 
 # Rozmycie
 _ROZMYCIE_RUCH_I_SREDNICA = (3, 7)
-_ROZMYCIE_GAUSS_SIGMA     = (0.3, 1.2)
+_ROZMYCIE_GAUSS_SIGMA = (0.3, 1.2)
 
 # Kompresja JPEG (zapis/odczyt w pamięci)
 _JPEG_JAKOSC_MIN = 60
 _JPEG_JAKOSC_MAX = 95
 
 # Jasność i kontrast (znormalizowane: -1.0..1.0)
-_JASNOSC_KONTRAST_JAS   = (-0.10, 0.10)
+_JASNOSC_KONTRAST_JAS = (-0.10, 0.10)
 _JASNOSC_KONTRAST_KONTR = (-0.15, 0.15)
 
 # Nasycenie i odcień
@@ -46,18 +46,18 @@ _NASYCENIE_HUE_SAT = (-15, 15)
 _NASYCENIE_VAL_SAT = (-20, 20)
 
 # Winietowanie
-_WINIETA_INTENS_MIN  = 0.15
-_WINIETA_INTENS_MAX  = 0.40
+_WINIETA_INTENS_MIN = 0.15
+_WINIETA_INTENS_MAX = 0.40
 
 # Chroma aberration
 _CHROMA_PRzesuniecie_MAX = 3
-_CHROMA_ROZMYCIE         = 0.6
+_CHROMA_ROZMYCIE = 0.6
 
 # Ekspozycja lokalna
 _LOKALNA_ROZMIAR_OKNA_MIN = 80
 _LOKALNA_ROZMIAR_OKNA_MAX = 250
-_LOKALNA_ROZMIAR_SIGMA    = 0.25
-_LOKALNA_WARIACJA         = 0.12
+_LOKALNA_ROZMIAR_SIGMA = 0.25
+_LOKALNA_WARIACJA = 0.12
 
 # Balans bieli (temperatura barwowa)
 _BBT_MIN = 5500.0
@@ -116,8 +116,9 @@ def _aberracja_chromatyczna(obraz: NDArray, przesuniecie: int,
     map_x_minus = (map_x_minus + 1) * 0.5 * szer
     map_y_out = (map_y + 1) * 0.5 * wys
 
-    # POPRAWKA: przeciwstawne przesunięcie kanału niebieskiego (0) i czerwonego (2)
-    # zamiast modyfikacji tylko jednego kanału — to daje realistyczny efekt
+    # POPRAWKA: przeciwstawne przesunięcie kanału niebieskiego (0)
+    # i czerwonego (2) zamiast modyfikacji tylko jednego kanału — to daje
+    # realistyczny efekt
     # rozchodzenia barw zamiast jednostronnego przesunięcia.
     wynik[:, :, 0] = cv2.remap(
         cv2.GaussianBlur(obraz[:, :, 0], (0, 0), rozmycie),
@@ -133,7 +134,8 @@ def _aberracja_chromatyczna(obraz: NDArray, przesuniecie: int,
 def _balans_bieli(obraz: NDArray, temperatura: float) -> NDArray:
     """Zmiana temperatury barwowej: >6500K cieplej, <6500K chłodniej.
 
-    UWAGA: obraz jest w kolejności BGR — kanał 0 to niebieski, kanał 2 to czerwony.
+    UWAGA: obraz jest w kolejności BGR — kanał 0 to niebieski,
+    kanał 2 to czerwony.
     """
     wynik = obraz.astype(np.float32)
     przesuniecie = (temperatura - 6500.0) / _BBT_ODCHYLENIE
@@ -201,9 +203,9 @@ def augmentuj_obraz(sciezka_wejsciowa: str, sciezka_wyjsciowa: str,
 
     # parametry własnych efektów losowane raz na obraz (z globalnego random)
     temperatura = random.uniform(_BBT_MIN, _BBT_MAX)
-    winieta     = random.uniform(_WINIETA_INTENS_MIN, _WINIETA_INTENS_MAX)
-    chroma_dx   = random.randint(1, _CHROMA_PRzesuniecie_MAX)
-    jpeg_q      = random.randint(_JPEG_JAKOSC_MIN, _JPEG_JAKOSC_MAX)
+    winieta = random.uniform(_WINIETA_INTENS_MIN, _WINIETA_INTENS_MAX)
+    chroma_dx = random.randint(1, _CHROMA_PRzesuniecie_MAX)
+    jpeg_q = random.randint(_JPEG_JAKOSC_MIN, _JPEG_JAKOSC_MAX)
 
     pipeline = A.Compose(
         [
@@ -277,7 +279,7 @@ def augmentuj_dataset(katalog_datasetu: str, kopie: int = 1,
 
     zrobione = 0
     for sciezka in zrodla:
-        baza    = os.path.splitext(os.path.basename(sciezka))[0]
+        baza = os.path.splitext(os.path.basename(sciezka))[0]
         labelka = os.path.join(kat_lbl, baza + ".txt")
         if not os.path.isfile(labelka):
             print(f"POMIJAM (brak labelki): {baza}")

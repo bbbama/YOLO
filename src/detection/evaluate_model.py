@@ -1,14 +1,15 @@
 """
 Ewaluacja modelu na splicie test.
 
-1. Standardowe metryki detekcji (ultralytics `model.val`, liczone na całym zbiorze):
-   precision, recall, mAP@0.5, mAP@0.5:0.95.
+1. Standardowe metryki detekcji (ultralytics `model.val`, liczone na całym
+   zbiorze): precision, recall, mAP@0.5, mAP@0.5:0.95.
 2. Zgodność liczby obiektów — odsetek obrazów, na których liczba detekcji
-   (po progu conf) równa się liczbie klocków w etykiecie. To bezpośrednia miara
-   celu projektu (liczenie klocków).
+   (po progu conf) równa się liczbie klocków w etykiecie. To bezpośrednia
+   miara celu projektu (liczenie klocków).
 
 Użycie:
-    python src/detection/evaluate_model.py [--model models/best.pt] [--conf 0.5]
+    python src/detection/evaluate_model.py
+        [--model models/best.pt] [--conf 0.5]
 """
 
 import argparse
@@ -31,7 +32,7 @@ DATA_YAML = PROJECT_ROOT / "data" / "lego_dataset" / "data.yaml"
 CONF_THRESHOLD = 0.5        # próg pewności dla liczenia obiektów
 IOU_THRESHOLD = 0.5         # standard branżowy
 ACCEPT_MAP_MIN = 0.5        # minimalny mAP@0.5 do akceptacji
-ACCEPT_COUNT_ACC_MIN = 80.0 # minimalna zgodność liczby obiektów [%]
+ACCEPT_COUNT_ACC_MIN = 80.0  # minimalna zgodność liczby obiektów [%]
 
 
 def policz_etykiety(label_path: str) -> int:
@@ -47,20 +48,23 @@ def katalog_testu(data_yaml: Path) -> Path:
     with open(data_yaml, "r") as f:
         cfg = yaml.safe_load(f)
     if "test" not in cfg:
-        raise KeyError(f"Brak klucza 'test' w {data_yaml} — wygeneruj dataset ponownie.")
+        raise KeyError(f"Brak klucza 'test' w {data_yaml} — "
+                       "wygeneruj dataset ponownie.")
     baza = Path(cfg.get("path") or data_yaml.parent)
     if not baza.is_absolute():
         baza = data_yaml.parent / baza
     return baza / cfg["test"]
 
 
-def zgodnosc_liczby(model: YOLO, images_dir: Path, conf: float) -> tuple[int, int]:
-    """Zwraca (liczba obrazów z poprawnie policzonymi klockami, liczba obrazów)."""
+def zgodnosc_liczby(model: YOLO, images_dir: Path,
+                    conf: float) -> tuple[int, int]:
+    """Zwraca (obrazy z poprawnie policzonymi klockami, wszystkie obrazy)."""
     image_files = sorted(glob.glob(os.path.join(images_dir, "*.png")))
     poprawne = 0
     for img_path in image_files:
         # images/test/x.png -> labels/test/x.txt
-        label_path = img_path.replace(f"{os.sep}images{os.sep}", f"{os.sep}labels{os.sep}")
+        label_path = img_path.replace(f"{os.sep}images{os.sep}",
+                                      f"{os.sep}labels{os.sep}")
         label_path = os.path.splitext(label_path)[0] + ".txt"
         wynik = model.predict(img_path, conf=conf, verbose=False)[0]
         if len(wynik.boxes) == policz_etykiety(label_path):
@@ -69,9 +73,12 @@ def zgodnosc_liczby(model: YOLO, images_dir: Path, conf: float) -> tuple[int, in
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ewaluacja modelu YOLO na splicie test.")
-    parser.add_argument("--model", type=Path, default=MODEL_PATH, help="ścieżka do wag .pt")
-    parser.add_argument("--data", type=Path, default=DATA_YAML, help="ścieżka do data.yaml")
+    parser = argparse.ArgumentParser(
+        description="Ewaluacja modelu YOLO na splicie test.")
+    parser.add_argument("--model", type=Path, default=MODEL_PATH,
+                        help="ścieżka do wag .pt")
+    parser.add_argument("--data", type=Path, default=DATA_YAML,
+                        help="ścieżka do data.yaml")
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD,
                         help="próg pewności dla liczenia obiektów")
     args = parser.parse_args()
@@ -88,8 +95,9 @@ def main() -> None:
     model = YOLO(args.model)
 
     # 1. Standardowe metryki (conf niski — mAP liczony po całej krzywej P-R)
-    metryki = model.val(data=str(args.data), split="test", iou=0.7, plots=False,
-                        verbose=False, project=str(PROJECT_ROOT / "runs" / "detect"),
+    metryki = model.val(data=str(args.data), split="test", iou=0.7,
+                        plots=False, verbose=False,
+                        project=str(PROJECT_ROOT / "runs" / "detect"),
                         name="eval_test", exist_ok=True)
     box = metryki.box
 
@@ -107,7 +115,8 @@ def main() -> None:
     logger.info("Zgodność liczby obiektów: %.2f%% (%d/%d, conf=%.2f)",
                 count_accuracy, poprawne, n_obrazow, args.conf)
 
-    is_acceptable = box.map50 >= ACCEPT_MAP_MIN and count_accuracy >= ACCEPT_COUNT_ACC_MIN
+    is_acceptable = (box.map50 >= ACCEPT_MAP_MIN
+                     and count_accuracy >= ACCEPT_COUNT_ACC_MIN)
     status = "AKCEPTOWALNA ✓" if is_acceptable else "DO POPRAWY ✗"
     logger.info("STATUS: %s", status)
     logger.info(separator)
