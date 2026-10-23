@@ -1,0 +1,98 @@
+✅ PLAN ROZBUDOWY GENERATORA DATASETU (YOLO – LICZENIE OBIEKTÓW)
+🔹 1. Generowanie wielu obiektów
+ Zamiast jednego klocka generuj losową liczbę (np. 0–10)
+ Duplikuj obiekt (copy()) zamiast używać jednego
+ Każdy klocek:
+ losowa pozycja (X, Y)
+ losowa rotacja (Z)
+ losowy kolor
+🔹 2. Wiele bounding boxów (YOLO format)
+ Oblicz bbox dla każdego obiektu osobno
+ Zapisuj wiele linii w pliku .txt
+ Pomijaj bboxy:
+ za małe
+ poza kadrem
+🔹 3. Dodanie obiektów zakłócających (distractors)
+ Dodaj losowe obiekty:
+ cube
+ cylinder
+ inne mesh’e
+ Nadaj im:
+ losowe kolory
+ różne materiały
+ NIE zapisuj ich w labelach
+🔹 4. Nachodzenie i zasłanianie obiektów
+ Pozwól obiektom się:
+ częściowo nakładać
+ zasłaniać nawzajem
+ Dodaj różne wysokości (Z)
+ Nie filtruj kolizji → są pożądane
+🔹 5. Kamera top-down (docelowy setup)
+ Ustaw kamerę nad sceną
+ Patrzy pionowo w dół
+ Dodaj mały losowy offset:
+ X/Y jitter
+ lekka rotacja
+🔹 6. Randomizacja środowiska (domain randomization)
+ Kolor światła
+ Intensywność światła
+ Pozycja światła
+ Tło (world)
+ Materiał półki:
+ różne kolory
+ szum proceduralny
+ Dodaj:
+ depth of field (DOF)
+ blur
+🔹 7. Edge cases (kluczowe dla modelu)
+ 0 obiektów (pusta scena)
+ 1 obiekt
+ dużo obiektów (np. 15–20)
+ obiekty:
+ przy krawędzi
+ częściowo poza kadrem
+🔹 8. Skalowanie datasetu
+ Zwiększ liczbę próbek:
+ minimum: 5 000
+ docelowo: 20k–50k
+ Zachowaj balans:
+ różna liczba obiektów
+ różne scenariusze
+🔹 9. Walidacja labeli
+ Sprawdzaj:
+ czy bbox istnieje
+ czy nie jest zerowy
+ Debug:
+ log gdy brak obiektów
+ log gdy bbox poza kadrem
+🔹 10. Czyszczenie sceny po każdej iteracji
+ Usuwaj:
+ wygenerowane klocki
+ distractory
+ Zapobiega:
+ wyciekom pamięci
+ nakładaniu obiektów między klatkami
+🔹 11. Rozszerzenie klas (opcjonalnie)
+ Dodaj różne typy klocków:
+ 2x4
+ 2x2
+ 1x4
+ Zaktualizuj:
+ CLASS_ID
+ data.yaml
+🔹 12. Liczenie obiektów (finalny cel)
+ YOLO wykrywa bboxy
+ Liczenie:
+ count = liczba wykryć
+ (opcjonalnie) filtr confidence
+🔹 13. Realizm (poziom PRO)
+ HDRI lighting
+ realistyczne tekstury (obrazy, nie tylko kolory)
+ różne typy półek:
+ drewno
+ metal
+ lekki „brud” / niedoskonałości
+🔹 14. Miks danych (najlepsze efekty)
+ Połącz:
+ dane syntetyczne (Blender)
+ prawdziwe zdjęcia

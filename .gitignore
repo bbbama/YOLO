@@ -1,10 +1,10 @@
 # Ignoruj wygenerowany dataset
 data/
 runs/
-docs/
 models/
 
 # Python & System
+.DS_Store
 __pycache__/
 *.py[cod]
 *$py.class

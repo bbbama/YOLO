@@ -32,11 +32,22 @@ ZAKRES_XY      = 2.0      # maksymalna odległość od środka półki (klocki b
 USE_TEX_BG    = True     # tekstura tła sceny
 USE_TEX_SHELF = True     # tekstura półki
 
+WYCZYSC_DATASET = True   # True = usuń stare obrazy/etykiety przed generacją (brak mieszania przebiegów)
+                         # False = dogeneruj do istniejącego datasetu (numeracja od ostatniej klatki)
+MIN_BBOX_PX     = 2      # minimalny wymiar bboxa w pikselach (mniejsze = praktycznie niewidoczne)
+
 script_dir    = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT  = os.path.dirname(os.path.dirname(script_dir))
 BASE_DIR      = os.path.join(PROJECT_ROOT, "data", "lego_dataset")
 TEX_BG_DIR    = os.path.join(PROJECT_ROOT, "data", "textures", "backgrounds")
 TEX_SHELF_DIR = os.path.join(PROJECT_ROOT, "data", "textures", "shelf")
+
+# Nadpisanie z linii poleceń (szybkie testy na małej liczbie klatek), np.:
+#   LEGO_NUM_SAMPLES=3 LEGO_OUT_DIR=/tmp/test_ds blender -b Simulation.blend --python Simulation.py
+NUM_SAMPLES = int(os.environ.get("LEGO_NUM_SAMPLES", NUM_SAMPLES))
+BASE_DIR    = os.path.abspath(os.environ.get("LEGO_OUT_DIR", BASE_DIR))
+if "LEGO_SEED" in os.environ:
+    SEED = int(os.environ["LEGO_SEED"])
 
 if SEED is not None:
     random.seed(SEED)
@@ -53,7 +64,7 @@ obj_wzor.hide_viewport = True
 
 # Obłaskawienie krawędzi klocka: realistyczne refleksy na kantach
 # (modyfikator dziedziczony przez wszystkie klony z postaw_klocki)
-bevel = obj_wzor.modifiers.new("Bevel", 'BEVEL')
+bevel = obj_wzor.modifiers.get("Bevel") or obj_wzor.modifiers.new("Bevel", 'BEVEL')
 bevel.width    = max(obj_wzor.dimensions) * random.uniform(0.005, 0.015)
 bevel.segments = 2
 
@@ -75,17 +86,38 @@ scene.render.image_settings.compression   = 0
 # ============================================================
 # TWORZENIE KATALOGÓW I PLIKU YAML
 # ============================================================
-for split in ["train", "val", "test"]:
+SPLITY = ["train", "val", "test"]
+
+if WYCZYSC_DATASET:
+    # tylko pliki wygenerowane przez skrypt (obrazy, etykiety, cache YOLO)
+    for split in SPLITY:
+        for wzorzec in (os.path.join(BASE_DIR, "images", split, "*.png"),
+                        os.path.join(BASE_DIR, "labels", split, "*.txt")):
+            for p in glob.glob(wzorzec):
+                os.remove(p)
+    for p in glob.glob(os.path.join(BASE_DIR, "labels", "*.cache")):
+        os.remove(p)
+
+for split in SPLITY:
     os.makedirs(os.path.join(BASE_DIR, "images", split), exist_ok=True)
     os.makedirs(os.path.join(BASE_DIR, "labels", split), exist_ok=True)
 
+# path bezwzględny — YOLO rozwiązuje względny path od katalogu uruchomienia
 with open(os.path.join(BASE_DIR, "data.yaml"), "w") as f:
     f.write(
-        f"path: .\n"
+        f"path: {BASE_DIR}\n"
         f"train: images/train\n"
         f"val:   images/val\n"
+        f"test:  images/test\n"
         f"\nnc: 1\nnames: ['lego_2x4']\n"
     )
+
+def pierwsza_wolna_klatka():
+    """Numer następnej klatki — przy dogenerowaniu nie nadpisujemy istniejących."""
+    numery = [int(os.path.basename(p)[4:8])
+              for s in SPLITY
+              for p in glob.glob(os.path.join(BASE_DIR, "images", s, "img_[0-9][0-9][0-9][0-9].png"))]
+    return max(numery) + 1 if numery else 0
 
 # ============================================================
 # ŁADOWANIE TEKSTUR
@@ -105,11 +137,6 @@ print(f"Tekstury tła: {len(bg_textures)}, półki: {len(shelf_textures)}")
 # ============================================================
 # POMOCNIK: PRINCIPLED BSDF
 # ============================================================
-def bsdf(obj):
-    """Zwraca węzeł Principled BSDF obiektu (lub None)."""
-    mat = obj.active_material
-    return mat.node_tree.nodes.get("Principled BSDF") if mat and mat.node_tree else None
-
 def nowy_material(obj, nazwa):
     """Przypisuje świeży materiał do obiektu i zwraca węzeł BSDF."""
     mat = bpy.data.materials.new(nazwa)
@@ -416,9 +443,11 @@ def ustaw_kamere():
 # ŚWIATŁA
 # ============================================================
 def losuj_swiatla():
-    # Usuń stare
+    # Usuń stare (obiekty + osierocone dane świateł)
     for o in [o for o in bpy.data.objects if o.type == 'LIGHT']:
         bpy.data.objects.remove(o, do_unlink=True)
+    for l in [l for l in bpy.data.lights if l.users == 0]:
+        bpy.data.lights.remove(l)
 
     n = random.randint(NUM_LIGHTS_MIN, NUM_LIGHTS_MAX)
     for i in range(n):
@@ -480,8 +509,9 @@ def osadz_na_polce(obj):
 # KLOCKI
 # ============================================================
 def postaw_klocki(n):
-    """Klonuje wzór n razy, rozmieszcza bez kolizji. Zwraca listę obiektów."""
+    """Klonuje wzór n razy, rozmieszcza bez kolizji. Zwraca (obiekty, kolory RGB)."""
     klocki = []
+    kolory = []
     for idx in range(n):
         klon = obj_wzor.copy()
         klon.data = obj_wzor.data.copy()
@@ -504,9 +534,9 @@ def postaw_klocki(n):
                 bpy.data.meshes.remove(mesh)
             continue
 
-        losuj_material_klocka(klon, idx)
+        kolory.append(losuj_material_klocka(klon, idx))
         klocki.append(klon)
-    return klocki
+    return klocki, kolory
 
 def usun_klocki(klocki):
     for k in klocki:
@@ -514,6 +544,12 @@ def usun_klocki(klocki):
         bpy.data.objects.remove(k, do_unlink=True)
         if mesh.users == 0:
             bpy.data.meshes.remove(mesh)
+
+def usun_osierocone_materialy():
+    """Materiały klocków/rozpraszaczy tworzone co klatkę — bez sprzątania rośnie pamięć."""
+    for m in [m for m in bpy.data.materials
+              if m.users == 0 and m.name.startswith(("Mat_Klocek_", "Mat_Dyst_"))]:
+        bpy.data.materials.remove(m)
 
 # ============================================================
 # ROZPRASZACZE
@@ -583,26 +619,34 @@ def ustaw_compositor():
 # BOUNDING BOX YOLO
 # ============================================================
 def bbox_yolo(obj):
-    """Zwraca (cx, cy, w, h) w [0,1] lub None jeśli obiekt poza kadrem (min 20% widoczności)."""
+    """Zwraca (cx, cy, w, h) w [0,1] lub None jeśli obiekt poza kadrem.
+
+    Rzutuje wierzchołki siatki (po modyfikatorach, np. Bevel), a nie 8 narożników
+    bound_box — prostopadłościan obrócony w perspektywie daje za duży bbox.
+    Obiekty częściowo w kadrze dostają bbox przycięty do kadru.
+    """
     bpy.context.view_layer.update()
-    corners  = [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box]
-    pts      = [bpy_extras.object_utils.world_to_camera_view(scene, cam, c) for c in corners]
-    xs       = [p.x       for p in pts]
-    ys       = [1.0 - p.y for p in pts]
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    obj_eval  = obj.evaluated_get(depsgraph)
+    mesh      = obj_eval.to_mesh()
+    try:
+        mw  = obj_eval.matrix_world
+        pts = [bpy_extras.object_utils.world_to_camera_view(scene, cam, mw @ v.co)
+               for v in mesh.vertices]
+    finally:
+        obj_eval.to_mesh_clear()
 
-    orig_w = max(xs) - min(xs)
-    orig_h = max(ys) - min(ys)
-
-    x0, x1   = max(0.0, min(xs)), min(1.0, max(xs))
-    y0, y1   = max(0.0, min(ys)), min(1.0, max(ys))
-
-    if x0 >= x1 or y0 >= y1:
+    pts = [p for p in pts if p.z > 0]     # tylko wierzchołki przed kamerą
+    if not pts:
         return None
+    xs = [p.x       for p in pts]
+    ys = [1.0 - p.y for p in pts]
+
+    x0, x1 = max(0.0, min(xs)), min(1.0, max(xs))
+    y0, y1 = max(0.0, min(ys)), min(1.0, max(ys))
 
     w, h = x1 - x0, y1 - y0
-
-    # Akceptuj tylko jeśli min 20% wymiaru jest w kadrze
-    if w < 0.2 * orig_w or h < 0.2 * orig_h:
+    if w * scene.render.resolution_x < MIN_BBOX_PX or h * scene.render.resolution_y < MIN_BBOX_PX:
         return None
 
     return (x0 + w/2, y0 + h/2, w, h)
@@ -627,7 +671,8 @@ Y_MIN = max(min(_ys) + KRAWEDZ_POLKI, -ZAKRES_XY)
 Y_MAX = min(max(_ys) - KRAWEDZ_POLKI,  ZAKRES_XY)
 
 counts = {"train": 0, "val": 0, "test": 0}
-frame  = 0
+frame0 = pierwsza_wolna_klatka()
+frame  = frame0
 skip   = 0
 
 for i in range(NUM_SAMPLES):
@@ -638,7 +683,7 @@ for i in range(NUM_SAMPLES):
     # --- Scena ---
     pusta    = random.random() < P_PUSTA_SCENA
     n_zadane = 0 if pusta else random.randint(MIN_KLOCKI, MAX_KLOCKI)
-    klocki   = postaw_klocki(n_zadane)          # 0 -> pusta scena (tło)
+    klocki, kolory = postaw_klocki(n_zadane)    # 0 -> pusta scena (tło)
     if not klocki and not pusta:
         skip += 1
         continue
@@ -646,7 +691,7 @@ for i in range(NUM_SAMPLES):
     rozpraszacze = postaw_rozpraszacze(random.randint(0, MAX_DYSTR), klocki)
 
     # Materiał półki (tekstura lub procedura)
-    kolor_ref = bsdf(klocki[0]).inputs["Base Color"].default_value[:3] if klocki and bsdf(klocki[0]) else (0.5,)*3
+    kolor_ref = kolory[0] if kolory else (0.5,)*3
     if not ustaw_teksture_polki():
         losuj_material_polki(kolor_ref)
 
@@ -658,8 +703,8 @@ for i in range(NUM_SAMPLES):
 
     # --- Bounding boxy ---
     bpy.context.view_layer.update()
-    etykiety = [bbox_yolo(k) for k in klocki]
-    etykiety  = [e for e in etykiety if e and e[2] > 0.05 and e[3] > 0.05]
+    # każdy widoczny klocek dostaje etykietę (także mały / przycięty kadrem)
+    etykiety = [e for e in (bbox_yolo(k) for k in klocki) if e]
 
     # --- Render i zapis (pusty plik .txt = poprawna ramka tła dla YOLO) ---
     img   = os.path.join(BASE_DIR, "images", split, f"img_{frame:04d}.png")
@@ -680,19 +725,29 @@ for i in range(NUM_SAMPLES):
     # --- Sprzątanie ---
     usun_klocki(klocki)
     usun_rozpraszacze(rozpraszacze)
+    usun_osierocone_materialy()
 
 # ============================================================
 # ZAPIS KONFIGURACJI
 # ============================================================
 config = {
-    "generated": frame, "skipped": skip,
+    "generated": frame - frame0, "skipped": skip,
+    "first_frame": frame0,
     **counts,
     "num_samples": NUM_SAMPLES,
-    "resolution": [640, 640],
+    "seed": SEED,
+    "cleared_dataset": WYCZYSC_DATASET,
+    "resolution": [scene.render.resolution_x, scene.render.resolution_y],
     "class_id": CLASS_ID,
     "engine": scene.render.engine,
+    "params": {
+        "min_klocki": MIN_KLOCKI, "max_klocki": MAX_KLOCKI, "max_dystr": MAX_DYSTR,
+        "train_ratio": TRAIN_RATIO, "val_ratio": VAL_RATIO,
+        "p_pusta_scena": P_PUSTA_SCENA, "p_brak_dof": P_BRAK_DOF,
+        "zakres_xy": ZAKRES_XY, "min_bbox_px": MIN_BBOX_PX,
+    },
 }
 with open(os.path.join(BASE_DIR, "config.json"), "w") as f:
     json.dump(config, f, indent=2)
 
-print(f"\nGotowe! Frames: {frame}, skip: {skip}, {counts}")
+print(f"\nGotowe! Frames: {frame - frame0}, skip: {skip}, {counts}")

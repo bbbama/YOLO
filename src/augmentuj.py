@@ -62,7 +62,7 @@ _LOKALNA_WARIACJA         = 0.12
 # Balans bieli (temperatura barwowa)
 _BBT_MIN = 5500.0
 _BBT_MAX = 7500.0
-_BBT_ODCHYLENIE = 100.0
+_BBT_ODCHYLENIE = 1000.0   # 100 K -> 0.5% wzmocnienia kanału (max ±5%)
 
 
 # =============================================================================
