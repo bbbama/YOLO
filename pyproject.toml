@@ -4,4 +4,6 @@ version = "0.1.0"
 dependencies = [
     "ultralytics",
     "numpy",
+    "albumentations>=2.0",
+    "opencv-python",
 ]

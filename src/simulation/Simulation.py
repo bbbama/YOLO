@@ -23,6 +23,12 @@ VAL_RATIO     = 0.15
 NUM_LIGHTS_MIN = 1
 NUM_LIGHTS_MAX = 3
 
+P_BRAK_DOF     = 0.25     # udział zdjęć w pełni ostrych (bez DOF)
+P_PUSTA_SCENA  = 0.10     # udział scen bez klocków (tło dla YOLO)
+SEED           = None     # wpisz liczbę (np. 42) dla pełnej odtwarzalności układu scen
+KRAWEDZ_POLKI  = 0.3      # margines od krawędzi półki przy losowaniu pozycji
+ZAKRES_XY      = 2.0      # maksymalna odległość od środka półki (klocki blisko siebie = dobrze widoczne)
+
 USE_TEX_BG    = True     # tekstura tła sceny
 USE_TEX_SHELF = True     # tekstura półki
 
@@ -31,6 +37,9 @@ PROJECT_ROOT  = os.path.dirname(os.path.dirname(script_dir))
 BASE_DIR      = os.path.join(PROJECT_ROOT, "data", "lego_dataset")
 TEX_BG_DIR    = os.path.join(PROJECT_ROOT, "data", "textures", "backgrounds")
 TEX_SHELF_DIR = os.path.join(PROJECT_ROOT, "data", "textures", "shelf")
+
+if SEED is not None:
+    random.seed(SEED)
 
 # ============================================================
 # POBRANIE OBIEKTÓW ZE SCENY
@@ -42,6 +51,12 @@ cam       = bpy.data.objects["Camera"]
 obj_wzor.hide_render   = True
 obj_wzor.hide_viewport = True
 
+# Obłaskawienie krawędzi klocka: realistyczne refleksy na kantach
+# (modyfikator dziedziczony przez wszystkie klony z postaw_klocki)
+bevel = obj_wzor.modifiers.new("Bevel", 'BEVEL')
+bevel.width    = max(obj_wzor.dimensions) * random.uniform(0.005, 0.015)
+bevel.segments = 2
+
 scene = bpy.context.scene
 
 # ============================================================
@@ -51,12 +66,11 @@ scene.render.engine                       = 'BLENDER_EEVEE'
 scene.render.resolution_x                 = 640
 scene.render.resolution_y                 = 640
 scene.render.resolution_percentage        = 100
-scene.render.filter_size                  = 2.0
-scene.eevee.taa_render_samples            = 64
+scene.render.filter_size                  = 1.5
+scene.eevee.taa_render_samples            = 128
 scene.render.image_settings.file_format   = 'PNG'
 scene.render.image_settings.color_mode    = 'RGB'
 scene.render.image_settings.compression   = 0
-scene.render.use_motion_blur              = True
 
 # ============================================================
 # TWORZENIE KATALOGÓW I PLIKU YAML
@@ -106,7 +120,7 @@ def nowy_material(obj, nazwa):
 # MATERIAŁY
 # ============================================================
 def losuj_material_klocka(obj, idx):
-    """Proceduralny materiał klocka z zarysowaniami, bump i pointiness."""
+    """Proceduralny materiał klocka ze spektrum zużycia: plamy, rysy, brud, połysk."""
     node = nowy_material(obj, f"Mat_Klocek_{idx}")
     if not node:
         return (0.5, 0.5, 0.5)
@@ -118,6 +132,8 @@ def losuj_material_klocka(obj, idx):
     # -- losowe wartości bazowe --
     kolor = (random.random(), random.random(), random.random(), 1.0)
     bazowy_metallic  = random.uniform(0.0, 0.1)
+    # 0 = klocek jak nowy (gładki), 1 = mocno używany (teksturowany)
+    zuzywanie = random.random()
 
     # ================================================================
     # 1. Noise → ColorRamp → Roughness  (mikro-zarysowania)
@@ -133,8 +149,8 @@ def losuj_material_klocka(obj, idx):
     cr_rough.location = (-500, 150)
     cr_rough.name = "CR_Rough"
     # rampa: ciemne → niskie roughness, jasne → wysokie roughness
-    cr_rough.color_ramp.elements[0].position = 0.35
-    cr_rough.color_ramp.elements[1].position = 0.65
+    cr_rough.color_ramp.elements[0].position = 0.35 - zuzywanie * 0.1
+    cr_rough.color_ramp.elements[1].position = 0.65 + zuzywanie * 0.1
 
     links.new(n_rough.outputs["Fac"], cr_rough.inputs["Fac"])
 
@@ -150,7 +166,7 @@ def losuj_material_klocka(obj, idx):
     n_bump = nodes.new("ShaderNodeBump")
     n_bump.location = (-500, -300)
     n_bump.name = "Bump"
-    n_bump.inputs["Strength"].default_value = 0.08
+    n_bump.inputs["Strength"].default_value = 0.02 + zuzywanie * random.uniform(0.08, 0.23)
     n_bump.inputs["Distance"].default_value = 0.01
     links.new(n_bump_tex.outputs["Fac"], n_bump.inputs["Height"])
 
@@ -169,7 +185,8 @@ def losuj_material_klocka(obj, idx):
     mix_color.blend_type = 'MIX'
     mix_color.inputs["Color1"].default_value = kolor
     links.new(n_color.outputs["Color"], mix_color.inputs["Color2"])
-    mix_color.inputs["Fac"].default_value = random.uniform(0.05, 0.15)
+    mix_color.inputs["Fac"].default_value = min(
+        random.uniform(0.05, 0.15) + zuzywanie * random.uniform(0.10, 0.25), 0.45)
 
     # ================================================================
     # 4. Geometry → Pointiness  (przetarcia na krawędziach)
@@ -178,13 +195,13 @@ def losuj_material_klocka(obj, idx):
     n_geom.location = (-750, -500)
     n_geom.name = "Geometry"
 
-    # Pointiness: 0=flat, 1=edge → wygładzamy potęgą < 1
-    n_pow = nodes.new("ShaderNodeMath")
-    n_pow.location = (-550, -500)
-    n_pow.name = "Pow_Pointiness"
-    n_pow.operation = 'POWER'
-    n_pow.inputs[1].default_value = 0.4
-    links.new(n_geom.outputs["Pointiness"], n_pow.inputs[0])
+    # Map Range: rozjaśniamy TYLKO wypukłe krawędzie (pointiness > 0.5)
+    map_edge = nodes.new("ShaderNodeMapRange")
+    map_edge.location = (-550, -500)
+    map_edge.name = "Map_Edge"
+    map_edge.inputs["From Min"].default_value = 0.5
+    map_edge.inputs["From Max"].default_value = random.uniform(0.60, 0.70)
+    links.new(n_geom.outputs["Pointiness"], map_edge.inputs["Value"])
 
     # rozjaśnienie krawędzi: mix z jaśniejszym odcieniem
     mix_edge = nodes.new("ShaderNodeMixRGB")
@@ -195,20 +212,92 @@ def losuj_material_klocka(obj, idx):
     # jaśniejsza wersja koloru (rozjaśnienie o ~30 %)
     jasny = tuple(min(c + 0.3, 1.0) for c in kolor[:3]) + (1.0,)
     mix_edge.inputs["Color2"].default_value = jasny
-    links.new(n_pow.outputs["Value"], mix_edge.inputs["Fac"])
+    links.new(map_edge.outputs["Result"], mix_edge.inputs["Fac"])
+
+    # ================================================================
+    # 5. Pointiness odwrócony → brud w zagłębieniach (cavity)
+    # ================================================================
+    map_cav = nodes.new("ShaderNodeMapRange")
+    map_cav.location = (-550, -650)
+    map_cav.name = "Map_Cavity"
+    # wklęsłości (pointiness < 0.5) dostają brud; maks. intensywność = zuzywanie
+    map_cav.inputs["From Min"].default_value = random.uniform(0.38, 0.44)
+    map_cav.inputs["From Max"].default_value = 0.5
+    map_cav.inputs["To Min"].default_value   = zuzywanie
+    map_cav.inputs["To Max"].default_value   = 0.0
+    links.new(n_geom.outputs["Pointiness"], map_cav.inputs["Value"])
+
+    mix_cav = nodes.new("ShaderNodeMixRGB")
+    mix_cav.location = (-150, -600)
+    mix_cav.name = "Mix_Cavity"
+    mix_cav.blend_type = 'MIX'
+    links.new(mix_edge.outputs["Color"], mix_cav.inputs["Color1"])
+    ciemny = tuple(c * 0.6 for c in kolor[:3]) + (1.0,)
+    mix_cav.inputs["Color2"].default_value = ciemny
+    links.new(map_cav.outputs["Result"], mix_cav.inputs["Fac"])
+
+    # ================================================================
+    # 6. Rysy: noise rozciągnięty mappingiem → cienkie smugi w roughness
+    # ================================================================
+    coord = nodes.new("ShaderNodeTexCoord")
+    coord.location = (-1050, -800)
+    coord.name = "Coord_Rysy"
+
+    mapa = nodes.new("ShaderNodeMapping")
+    mapa.location = (-900, -800)
+    mapa.name = "Map_Rysy"
+    baza = random.uniform(25.0, 50.0)
+    mapa.inputs["Scale"].default_value = (random.uniform(2.0, 6.0), baza, baza)
+    links.new(coord.outputs["Object"], mapa.inputs["Vector"])
+
+    n_rys = nodes.new("ShaderNodeTexNoise")
+    n_rys.location = (-750, -800)
+    n_rys.name = "Noise_Rysy"
+    n_rys.inputs["Scale"].default_value  = random.uniform(6.0, 10.0)
+    n_rys.inputs["Detail"].default_value = 2.0
+    links.new(mapa.outputs["Vector"], n_rys.inputs["Vector"])
+
+    cr_rys = nodes.new("ShaderNodeValToRGB")
+    cr_rys.location = (-550, -800)
+    cr_rys.name = "CR_Rysy"
+    # wąska rampa wycina z noise'u tylko cienkie linie
+    cr_rys.color_ramp.elements[0].position = random.uniform(0.42, 0.48)
+    cr_rys.color_ramp.elements[1].position = random.uniform(0.52, 0.58)
+
+    links.new(n_rys.outputs["Fac"], cr_rys.inputs["Fac"])
+
+    mix_rys = nodes.new("ShaderNodeMixRGB")
+    mix_rys.location = (-300, 150)
+    mix_rys.name = "Mix_Rysy"
+    mix_rys.blend_type = 'MIX'
+    links.new(cr_rough.outputs["Color"], mix_rys.inputs["Color1"])
+    links.new(cr_rys.outputs["Color"], mix_rys.inputs["Color2"])
+    # rysy widoczne proporcjonalnie do zużycia (jasne rysy = matowe ściegi)
+    mix_rys.inputs["Fac"].default_value = zuzywanie * random.uniform(0.4, 0.8)
 
     # ================================================================
     # Podłączenie do Principled BSDF
     # ================================================================
-    links.new(mix_edge.outputs["Color"], node.inputs["Base Color"])
+    links.new(mix_cav.outputs["Color"], node.inputs["Base Color"])
 
-    # Roughness: kolor rampy z noise'a
-    links.new(cr_rough.outputs["Color"], node.inputs["Roughness"])
+    # Roughness: rampa + rysy, zacisk do realistycznego zakresu plastiku
+    # (pełne 0–1 daje fragmenty lustrzane lub idealnie matowe)
+    map_rough = nodes.new("ShaderNodeMapRange")
+    map_rough.location = (-100, 150)
+    map_rough.name = "Map_Rough"
+    map_rough.inputs["To Min"].default_value = 0.15
+    map_rough.inputs["To Max"].default_value = 0.75
+    links.new(mix_rys.outputs["Color"], map_rough.inputs["Value"])
+    links.new(map_rough.outputs["Result"], node.inputs["Roughness"])
 
     # Normal: bump z noise'a
     links.new(n_bump.outputs["Normal"], node.inputs["Normal"])
 
     node.inputs["Metallic"].default_value = bazowy_metallic
+
+    # Plastikowy połysk (lakier bezbarwny) — tylko przy zużyciu
+    if "Coat Weight" in node.inputs:
+        node.inputs["Coat Weight"].default_value = zuzywanie * random.uniform(0.05, 0.30)
 
     # Estetyczny układ: shader i output na końcu
     node.location = (250, 0)
@@ -331,8 +420,10 @@ def losuj_swiatla():
     for o in [o for o in bpy.data.objects if o.type == 'LIGHT']:
         bpy.data.objects.remove(o, do_unlink=True)
 
-    for i in range(random.randint(NUM_LIGHTS_MIN, NUM_LIGHTS_MAX)):
-        typ = random.choice(['POINT', 'SUN', 'AREA'])
+    n = random.randint(NUM_LIGHTS_MIN, NUM_LIGHTS_MAX)
+    for i in range(n):
+        # pierwsze światło = duże miękkie AREA jako główne (miękkie cienie)
+        typ = 'AREA' if i == 0 else random.choice(['POINT', 'SUN', 'AREA'])
         bpy.ops.object.light_add(type=typ)
         lt = bpy.context.active_object
         lt.name = f"Light_{i}"
@@ -341,6 +432,11 @@ def losuj_swiatla():
             lt.location = (0, 0, 10)
             lt.rotation_euler = (random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5), random.uniform(0, 2*math.pi))
             lt.data.energy = random.uniform(2, 8)
+        elif i == 0:
+            # kluczowe AREA: duże i wysoko nad półką
+            lt.location = (random.uniform(-4, 4), random.uniform(-4, 4), random.uniform(5, 8))
+            lt.data.size   = random.uniform(3, 8)
+            lt.data.energy = random.uniform(800, 2500)
         else:
             lt.location = (random.uniform(-5, 5), random.uniform(-5, 5), random.uniform(2, 8))
             lt.data.energy = random.uniform(200, 1500)
@@ -352,13 +448,33 @@ def losuj_swiatla():
 # ============================================================
 # SPRAWDZANIE KOLIZJI
 # ============================================================
-def nachodza(a, b, margines=0.2):
-    """True jeśli okręgi okalające obiekty a i b zachodzą na siebie."""
-    def r(o):
-        d = o.dimensions
-        return math.sqrt((d.x/2)**2 + (d.y/2)**2)
-    dist = math.sqrt((a.location.x - b.location.x)**2 + (a.location.y - b.location.y)**2)
-    return dist < r(a) + r(b) + margines
+def _aabb_xy(o):
+    """AABB obiektu w płaszczyźnie XY: (x0, x1, y0, y1)."""
+    pts = [o.matrix_world @ mathutils.Vector(c) for c in o.bound_box]
+    return (min(p.x for p in pts), max(p.x for p in pts),
+            min(p.y for p in pts), max(p.y for p in pts))
+
+def nachodza(a, b, margines=0.05):
+    """True jeśli prostokąty (AABB w XY) obiektów a i b zachodzą na siebie."""
+    ax0, ax1, ay0, ay1 = _aabb_xy(a)
+    bx0, bx1, by0, by1 = _aabb_xy(b)
+    return not (ax1 + margines < bx0 or bx1 + margines < ax0 or
+                ay1 + margines < by0 or by1 + margines < ay0)
+
+# ============================================================
+# OSADZANIE NA PÓŁCE
+# ============================================================
+ORIENTACJE = [  # stabilne położenia klocka: płasko / do góry nogami / na długim / na krótkim boku
+    (0, 0), (math.pi, 0),
+    (math.pi/2, 0), (-math.pi/2, 0),
+    (0, math.pi/2), (0, -math.pi/2),
+]
+
+def osadz_na_polce(obj):
+    """Zsuwa obiekt w dół tak, by dotykał powierzchni półki."""
+    bpy.context.view_layer.update()
+    min_z = min((obj.matrix_world @ mathutils.Vector(c)).z for c in obj.bound_box)
+    obj.location.z += POLKA_TOP_Z - min_z
 
 # ============================================================
 # KLOCKI
@@ -372,10 +488,12 @@ def postaw_klocki(n):
         bpy.context.collection.objects.link(klon)
         klon.hide_render = klon.hide_viewport = False
 
-        for _ in range(100):
-            klon.location      = mathutils.Vector((random.uniform(-2, 2), random.uniform(-2, 2), -1))
-            klon.rotation_euler = (0, 0, random.uniform(0, 2*math.pi))
-            bpy.context.view_layer.update()
+        rx, ry = random.choice(ORIENTACJE)
+        for _ in range(200):
+            klon.rotation_euler = (rx, ry, random.uniform(0, 2*math.pi))
+            klon.location       = mathutils.Vector((random.uniform(X_MIN, X_MAX),
+                                                    random.uniform(Y_MIN, Y_MAX), 0))
+            osadz_na_polce(klon)
             if not any(nachodza(klon, k) for k in klocki):
                 break
         else:
@@ -416,10 +534,12 @@ def postaw_rozpraszacze(n, klocki):
         obj.name  = f"Dystraktor_{i}"
         obj.scale = mathutils.Vector((random.uniform(0.1, 0.4),) * 3)
 
-        for _ in range(50):
-            obj.location = mathutils.Vector((random.uniform(-3, 3), random.uniform(-3, 3), random.uniform(-0.5, 1)))
-            bpy.context.view_layer.update()
-            if not any(nachodza(obj, k) for k in klocki):
+        for _ in range(200):
+            obj.location = mathutils.Vector((random.uniform(X_MIN, X_MAX),
+                                             random.uniform(Y_MIN, Y_MAX), 0))
+            osadz_na_polce(obj)
+            if not any(nachodza(obj, k) for k in klocki) and \
+               not any(nachodza(obj, r) for r in rozpraszacze):
                 break
         else:
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -444,11 +564,13 @@ def usun_rozpraszacze(lista):
 # EFEKTY DODATKOWE
 # ============================================================
 def ustaw_dof(klocki):
-    """Ustawia głębię ostrości na losowy klocek."""
-    if not klocki:
+    """Realistyczny DOF: fizyczny otwór obiektywu + losowy punkt ostrości."""
+    if not klocki or random.random() < P_BRAK_DOF:
+        cam.data.dof.use_dof = False
         return
     cam.data.dof.use_dof = True
-    cam.data.dof.aperture_fstop = random.uniform(1.4, 8.0)
+    srednica_otworu = random.uniform(1.5, 9.0)   # mm - fizyczny otwór obiektywu
+    cam.data.dof.aperture_fstop = max(cam.data.lens / srednica_otworu, 1.2)
     cam.data.dof.focus_object = random.choice(klocki)
 
 def ustaw_compositor():
@@ -494,6 +616,16 @@ if obj_polka.active_material is None:
     nowy_material(obj_polka, "Mat_Polka")
 obj_polka.location = (0, 0, -2)
 
+# Geometria półki: wierzch + granice losowania (raz, przed pętlą)
+bpy.context.view_layer.update()
+POLKA_TOP_Z = max((obj_polka.matrix_world @ mathutils.Vector(c)).z for c in obj_polka.bound_box)
+_xs = [(obj_polka.matrix_world @ mathutils.Vector(c)).x for c in obj_polka.bound_box]
+_ys = [(obj_polka.matrix_world @ mathutils.Vector(c)).y for c in obj_polka.bound_box]
+X_MIN = max(min(_xs) + KRAWEDZ_POLKI, -ZAKRES_XY)
+X_MAX = min(max(_xs) - KRAWEDZ_POLKI,  ZAKRES_XY)
+Y_MIN = max(min(_ys) + KRAWEDZ_POLKI, -ZAKRES_XY)
+Y_MAX = min(max(_ys) - KRAWEDZ_POLKI,  ZAKRES_XY)
+
 counts = {"train": 0, "val": 0, "test": 0}
 frame  = 0
 skip   = 0
@@ -504,15 +636,17 @@ for i in range(NUM_SAMPLES):
     split = "train" if r < TRAIN_RATIO else "val" if r < TRAIN_RATIO + VAL_RATIO else "test"
 
     # --- Scena ---
-    klocki      = postaw_klocki(random.randint(MIN_KLOCKI, MAX_KLOCKI))
-    if not klocki:
+    pusta    = random.random() < P_PUSTA_SCENA
+    n_zadane = 0 if pusta else random.randint(MIN_KLOCKI, MAX_KLOCKI)
+    klocki   = postaw_klocki(n_zadane)          # 0 -> pusta scena (tło)
+    if not klocki and not pusta:
         skip += 1
         continue
 
     rozpraszacze = postaw_rozpraszacze(random.randint(0, MAX_DYSTR), klocki)
 
     # Materiał półki (tekstura lub procedura)
-    kolor_ref = bsdf(klocki[0]).inputs["Base Color"].default_value[:3] if bsdf(klocki[0]) else (0.5,)*3
+    kolor_ref = bsdf(klocki[0]).inputs["Base Color"].default_value[:3] if klocki and bsdf(klocki[0]) else (0.5,)*3
     if not ustaw_teksture_polki():
         losuj_material_polki(kolor_ref)
 
@@ -522,32 +656,26 @@ for i in range(NUM_SAMPLES):
     losuj_swiatla()
     ustaw_compositor()
 
-    # Losowy motion blur shutter
-    scene.render.motion_blur_shutter = random.uniform(0.0, 0.4)
-
     # --- Bounding boxy ---
     bpy.context.view_layer.update()
     etykiety = [bbox_yolo(k) for k in klocki]
     etykiety  = [e for e in etykiety if e and e[2] > 0.05 and e[3] > 0.05]
 
-    # --- Render i zapis ---
-    if etykiety:
-        img   = os.path.join(BASE_DIR, "images", split, f"img_{frame:04d}.png")
-        label = os.path.join(BASE_DIR, "labels", split, f"img_{frame:04d}.txt")
+    # --- Render i zapis (pusty plik .txt = poprawna ramka tła dla YOLO) ---
+    img   = os.path.join(BASE_DIR, "images", split, f"img_{frame:04d}.png")
+    label = os.path.join(BASE_DIR, "labels", split, f"img_{frame:04d}.txt")
 
-        scene.render.filepath = img
-        bpy.ops.render.render(write_still=True)
+    scene.render.filepath = img
+    bpy.ops.render.render(write_still=True)
 
-        with open(label, "w") as f:
-            for e in etykiety:
-                f.write(f"{CLASS_ID} {e[0]:.6f} {e[1]:.6f} {e[2]:.6f} {e[3]:.6f}\n")
+    with open(label, "w") as f:
+        for e in etykiety:
+            f.write(f"{CLASS_ID} {e[0]:.6f} {e[1]:.6f} {e[2]:.6f} {e[3]:.6f}\n")
 
-        counts[split] += 1
-        frame += 1
-        if frame % 100 == 0:
-            print(f"[{frame}] train={counts['train']} val={counts['val']} test={counts['test']}")
-    else:
-        skip += 1
+    counts[split] += 1
+    frame += 1
+    if frame % 100 == 0:
+        print(f"[{frame}] train={counts['train']} val={counts['val']} test={counts['test']}")
 
     # --- Sprzątanie ---
     usun_klocki(klocki)
